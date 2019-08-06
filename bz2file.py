@@ -75,6 +75,7 @@ class BZ2File(io.BufferedIOBase):
         self._compresslevel = compresslevel
         self._pos = 0
         self._size = -1
+        self._stream_counter = 0
 
         if buffering is not None:
             warnings.warn("Use of 'buffering' argument is deprecated",
@@ -92,15 +93,15 @@ class BZ2File(io.BufferedIOBase):
         elif mode in ("w", "wb"):
             mode = "wb"
             mode_code = _MODE_WRITE
-            self._compressor = BZ2Compressor(self._compresslevel)
+            self._compressor = None
         elif mode in ("x", "xb") and _HAS_OPEN_X_MODE:
             mode = "xb"
             mode_code = _MODE_WRITE
-            self._compressor = BZ2Compressor(self._compresslevel)
+            self._compressor = None
         elif mode in ("a", "ab"):
             mode = "ab"
             mode_code = _MODE_WRITE
-            self._compressor = BZ2Compressor(self._compresslevel)
+            self._compressor = None
         else:
             raise ValueError("Invalid mode: %r" % (mode,))
 
@@ -118,6 +119,7 @@ class BZ2File(io.BufferedIOBase):
     def _open_stream_if_needed(self):
         if self._compressor is None:
             self._compressor = BZ2Compressor(self._compresslevel)
+            self._stream_counter += 1
 
     def close_stream(self):
         with self._lock:
@@ -138,6 +140,9 @@ class BZ2File(io.BufferedIOBase):
                 if self._mode in (_MODE_READ, _MODE_READ_EOF):
                     self._decompressor = None
                 elif self._mode == _MODE_WRITE:
+                    if self._stream_counter == 0:
+                        # ensure empty file case is handled properly
+                        self._open_stream_if_needed()
                     self.close_stream()
             finally:
                 try:

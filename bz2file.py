@@ -72,6 +72,7 @@ class BZ2File(io.BufferedIOBase):
         self._fp = None
         self._closefp = False
         self._mode = _MODE_CLOSED
+        self._compresslevel = compresslevel
         self._pos = 0
         self._size = -1
 
@@ -91,15 +92,15 @@ class BZ2File(io.BufferedIOBase):
         elif mode in ("w", "wb"):
             mode = "wb"
             mode_code = _MODE_WRITE
-            self._compressor = BZ2Compressor(compresslevel)
+            self._compressor = BZ2Compressor(self._compresslevel)
         elif mode in ("x", "xb") and _HAS_OPEN_X_MODE:
             mode = "xb"
             mode_code = _MODE_WRITE
-            self._compressor = BZ2Compressor(compresslevel)
+            self._compressor = BZ2Compressor(self._compresslevel)
         elif mode in ("a", "ab"):
             mode = "ab"
             mode_code = _MODE_WRITE
-            self._compressor = BZ2Compressor(compresslevel)
+            self._compressor = BZ2Compressor(self._compresslevel)
         else:
             raise ValueError("Invalid mode: %r" % (mode,))
 

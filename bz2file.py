@@ -441,6 +441,27 @@ class BZ2File(io.BufferedIOBase):
             self._pos += len(uncompressed_data_len)
             return len(uncompressed_data_len)
 
+    def _ensure_prev_stream_eof(self):
+        self._fill_buffer(start_new_stream_if_needed=False)
+        if self._buffer_offset < len(self._buffer):
+            raise ValueError("Compressed I/O operation in the middle of an uncompressed stream")
+
+    def read_compressed_stream(self, size):
+        """"""
+        with self._lock:
+            self._check_can_read()
+            self._ensure_prev_stream_eof()
+
+            if len(self._rawblock_buffer) < size:
+                compressed_stream = self._rawblock_buffer
+                compressed_stream += self._fp.read(size - len(compressed_stream))
+                self._rawblock_buffer = b""
+            else:
+                compressed_stream = self._rawblock_buffer[:size]
+                self._rawblock_buffer = self._rawblock_buffer[size:]
+
+            return compressed_stream
+
     def writelines(self, seq):
         """Write a sequence of byte strings to the file.
 

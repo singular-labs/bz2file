@@ -438,8 +438,8 @@ class BZ2File(io.BufferedIOBase):
             self._ensure_no_active_compression_stream()
             self._fp.write(compressed_stream_bytes)
             self._stream_counter += 1
-            self._pos += len(uncompressed_data_len)
-            return len(uncompressed_data_len)
+            self._pos += uncompressed_data_len
+            return uncompressed_data_len
 
     def _ensure_prev_stream_eof(self):
         self._fill_buffer(start_new_stream_if_needed=False)

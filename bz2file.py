@@ -87,9 +87,10 @@ class BZ2File(io.BufferedIOBase):
         if mode in ("", "r", "rb"):
             mode = "rb"
             mode_code = _MODE_READ
-            self._decompressor = BZ2Decompressor()
+            self._decompressor = None
             self._buffer = b""
             self._buffer_offset = 0
+            self._rawblock_buffer = b""
         elif mode in ("w", "wb"):
             mode = "wb"
             mode_code = _MODE_WRITE
@@ -207,16 +208,25 @@ class BZ2File(io.BufferedIOBase):
                                           "does not support seeking")
 
     # Fill the readahead buffer if it is empty. Returns False on EOF.
-    def _fill_buffer(self):
+    def _fill_buffer(self, start_new_stream_if_needed=True):
         if self._mode == _MODE_READ_EOF:
             return False
+
+        if self._decompressor is None:
+            if start_new_stream_if_needed:
+                self._decompressor = BZ2Decompressor()
+                self._stream_counter += 1
+            else:
+                return False
+
         # Depending on the input data, our call to the decompressor may not
         # return any data. In this case, try again after reading another block.
         while self._buffer_offset == len(self._buffer):
-            rawblock = (self._decompressor.unused_data or
-                        self._fp.read(_BUFFER_SIZE))
+            self._rawblock_buffer = (self._rawblock_buffer or
+                                     self._decompressor.unused_data or
+                                     self._fp.read(_BUFFER_SIZE))
 
-            if not rawblock:
+            if not self._rawblock_buffer:
                 try:
                     self._decompressor.decompress(b"")
                 except EOFError:
@@ -230,12 +240,19 @@ class BZ2File(io.BufferedIOBase):
                                    "end-of-stream marker was reached")
 
             try:
-                self._buffer = self._decompressor.decompress(rawblock)
+                self._buffer = self._decompressor.decompress(self._rawblock_buffer)
+                self._rawblock_buffer = b""
             except EOFError:
+                if not start_new_stream_if_needed:
+                    self._decompressor = None
+                    return False
+
                 # Continue to next stream.
                 self._decompressor = BZ2Decompressor()
+                self._stream_counter += 1
                 try:
-                    self._buffer = self._decompressor.decompress(rawblock)
+                    self._buffer = self._decompressor.decompress(self._rawblock_buffer)
+                    self._rawblock_buffer = b""
                 except IOError:
                     # Trailing data isn't a valid bzip2 stream. We're done here.
                     self._mode = _MODE_READ_EOF
@@ -440,9 +457,11 @@ class BZ2File(io.BufferedIOBase):
         self._fp.seek(0, 0)
         self._mode = _MODE_READ
         self._pos = 0
-        self._decompressor = BZ2Decompressor()
+        self._decompressor = None
+        self._stream_counter = 0
         self._buffer = b""
         self._buffer_offset = 0
+        self._rawblock_buffer = b""
 
     def seek(self, offset, whence=0):
         """Change the file position.

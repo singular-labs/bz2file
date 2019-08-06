@@ -406,6 +406,24 @@ class BZ2File(io.BufferedIOBase):
             self._pos += len(data)
             return len(data)
 
+    def _ensure_no_active_compression_stream(self):
+        if self._compressor:
+            raise ValueError("Compressed I/O operation while an uncompressed stream is open")
+
+    def write_compressed_stream(self, compressed_stream_bytes, uncompressed_data_len):
+        """Write a complete compressed stream.
+
+        The given stream will be written as is to the underlying file
+        The current open stream will be closed, consecutive writes will be done to a new stream.
+        """
+        with self._lock:
+            self._check_can_write()
+            self._ensure_no_active_compression_stream()
+            self._fp.write(compressed_stream_bytes)
+            self._stream_counter += 1
+            self._pos += len(uncompressed_data_len)
+            return len(uncompressed_data_len)
+
     def writelines(self, seq):
         """Write a sequence of byte strings to the file.
 

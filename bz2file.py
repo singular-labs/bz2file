@@ -115,6 +115,16 @@ class BZ2File(io.BufferedIOBase):
             raise TypeError("filename must be a %s or %s object, or a file" %
                             (_STR_TYPES[0].__name__, _STR_TYPES[1].__name__))
 
+    def _open_stream_if_needed(self):
+        if self._compressor is None:
+            self._compressor = BZ2Compressor(self._compresslevel)
+
+    def close_stream(self):
+        with self._lock:
+            if self._compressor is not None:
+                self._fp.write(self._compressor.flush())
+                self._compressor = None
+
     def close(self):
         """Flush and close the file.
 
@@ -386,6 +396,7 @@ class BZ2File(io.BufferedIOBase):
         """
         with self._lock:
             self._check_can_write()
+            self._open_stream_if_needed()
             compressed = self._compressor.compress(data)
             self._fp.write(compressed)
             self._pos += len(data)

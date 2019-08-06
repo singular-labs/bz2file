@@ -138,8 +138,7 @@ class BZ2File(io.BufferedIOBase):
                 if self._mode in (_MODE_READ, _MODE_READ_EOF):
                     self._decompressor = None
                 elif self._mode == _MODE_WRITE:
-                    self._fp.write(self._compressor.flush())
-                    self._compressor = None
+                    self.close_stream()
             finally:
                 try:
                     if self._closefp:

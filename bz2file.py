@@ -425,7 +425,7 @@ class BZ2File(io.BufferedIOBase):
 
     def _ensure_no_active_compression_stream(self):
         if self._compressor:
-            raise ValueError("Compressed I/O operation while an uncompressed stream is open")
+            raise ValueError("Compressed I/O write while an uncompressed stream is open for writing")
 
     def write_compressed_stream(self, compressed_stream_bytes, uncompressed_data_len):
         """Write a complete compressed stream.
@@ -444,7 +444,7 @@ class BZ2File(io.BufferedIOBase):
     def _ensure_no_active_decompression_stream(self):
         self._fill_buffer(start_new_stream_if_needed=False)
         if self._decompressor or self._buffer_offset < len(self._buffer):
-            raise ValueError("Compressed I/O operation in the middle of an uncompressed stream")
+            raise ValueError("Compressed I/O read while reading an uncompressed stream")
 
     def read_compressed_stream(self, size):
         """"""

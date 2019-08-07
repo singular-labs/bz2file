@@ -441,16 +441,16 @@ class BZ2File(io.BufferedIOBase):
             self._pos += uncompressed_data_len
             return uncompressed_data_len
 
-    def _ensure_prev_stream_eof(self):
+    def _ensure_no_active_decompression_stream(self):
         self._fill_buffer(start_new_stream_if_needed=False)
-        if self._buffer_offset < len(self._buffer):
+        if self._decompressor or self._buffer_offset < len(self._buffer):
             raise ValueError("Compressed I/O operation in the middle of an uncompressed stream")
 
     def read_compressed_stream(self, size):
         """"""
         with self._lock:
             self._check_can_read()
-            self._ensure_prev_stream_eof()
+            self._ensure_no_active_decompression_stream()
 
             if len(self._rawblock_buffer) < size:
                 compressed_stream = self._rawblock_buffer

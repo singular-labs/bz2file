@@ -446,13 +446,17 @@ class BZ2File(io.BufferedIOBase):
         if self._decompressor or self._buffer_offset < len(self._buffer):
             raise ValueError("Compressed I/O read while reading an uncompressed stream")
 
-    def read_compressed_stream(self, size):
-        """"""
+    def read_compressed_stream(self, size=-1):
+        """Read up to size compressed bytes from the file.
+
+        If size is negative or omitted, read until EOF is reached.
+        Returns b'' if the file is already at EOF.
+        """
         with self._lock:
             self._check_can_read()
             self._ensure_no_active_decompression_stream()
 
-            if len(self._rawblock_buffer) < size:
+            if size < 0 or len(self._rawblock_buffer) < size:
                 compressed_stream = self._rawblock_buffer
                 compressed_stream += self._fp.read(size - len(compressed_stream))
                 self._rawblock_buffer = b""

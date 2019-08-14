@@ -72,8 +72,10 @@ class BZ2File(io.BufferedIOBase):
         self._fp = None
         self._closefp = False
         self._mode = _MODE_CLOSED
+        self._compresslevel = compresslevel
         self._pos = 0
         self._size = -1
+        self._stream_counter = 0
 
         if buffering is not None:
             warnings.warn("Use of 'buffering' argument is deprecated",
@@ -85,21 +87,22 @@ class BZ2File(io.BufferedIOBase):
         if mode in ("", "r", "rb"):
             mode = "rb"
             mode_code = _MODE_READ
-            self._decompressor = BZ2Decompressor()
+            self._decompressor = None
             self._buffer = b""
             self._buffer_offset = 0
+            self._rawblock_buffer = b""
         elif mode in ("w", "wb"):
             mode = "wb"
             mode_code = _MODE_WRITE
-            self._compressor = BZ2Compressor(compresslevel)
+            self._compressor = None
         elif mode in ("x", "xb") and _HAS_OPEN_X_MODE:
             mode = "xb"
             mode_code = _MODE_WRITE
-            self._compressor = BZ2Compressor(compresslevel)
+            self._compressor = None
         elif mode in ("a", "ab"):
             mode = "ab"
             mode_code = _MODE_WRITE
-            self._compressor = BZ2Compressor(compresslevel)
+            self._compressor = None
         else:
             raise ValueError("Invalid mode: %r" % (mode,))
 
@@ -114,6 +117,17 @@ class BZ2File(io.BufferedIOBase):
             raise TypeError("filename must be a %s or %s object, or a file" %
                             (_STR_TYPES[0].__name__, _STR_TYPES[1].__name__))
 
+    def _open_stream_if_needed(self):
+        if self._compressor is None:
+            self._compressor = BZ2Compressor(self._compresslevel)
+            self._stream_counter += 1
+
+    def close_stream(self):
+        with self._lock:
+            if self._compressor is not None:
+                self._fp.write(self._compressor.flush())
+                self._compressor = None
+
     def close(self):
         """Flush and close the file.
 
@@ -127,8 +141,10 @@ class BZ2File(io.BufferedIOBase):
                 if self._mode in (_MODE_READ, _MODE_READ_EOF):
                     self._decompressor = None
                 elif self._mode == _MODE_WRITE:
-                    self._fp.write(self._compressor.flush())
-                    self._compressor = None
+                    if self._stream_counter == 0:
+                        # ensure empty file case is handled properly
+                        self._open_stream_if_needed()
+                    self.close_stream()
             finally:
                 try:
                     if self._closefp:
@@ -192,16 +208,25 @@ class BZ2File(io.BufferedIOBase):
                                           "does not support seeking")
 
     # Fill the readahead buffer if it is empty. Returns False on EOF.
-    def _fill_buffer(self):
+    def _fill_buffer(self, start_new_stream_if_needed=True):
         if self._mode == _MODE_READ_EOF:
             return False
+
+        if self._decompressor is None:
+            if start_new_stream_if_needed:
+                self._decompressor = BZ2Decompressor()
+                self._stream_counter += 1
+            else:
+                return False
+
         # Depending on the input data, our call to the decompressor may not
         # return any data. In this case, try again after reading another block.
         while self._buffer_offset == len(self._buffer):
-            rawblock = (self._decompressor.unused_data or
-                        self._fp.read(_BUFFER_SIZE))
+            self._rawblock_buffer = (self._rawblock_buffer or
+                                     self._decompressor.unused_data or
+                                     self._fp.read(_BUFFER_SIZE))
 
-            if not rawblock:
+            if not self._rawblock_buffer:
                 try:
                     self._decompressor.decompress(b"")
                 except EOFError:
@@ -215,12 +240,19 @@ class BZ2File(io.BufferedIOBase):
                                    "end-of-stream marker was reached")
 
             try:
-                self._buffer = self._decompressor.decompress(rawblock)
+                self._buffer = self._decompressor.decompress(self._rawblock_buffer)
+                self._rawblock_buffer = b""
             except EOFError:
+                if not start_new_stream_if_needed:
+                    self._decompressor = None
+                    return False
+
                 # Continue to next stream.
                 self._decompressor = BZ2Decompressor()
+                self._stream_counter += 1
                 try:
-                    self._buffer = self._decompressor.decompress(rawblock)
+                    self._buffer = self._decompressor.decompress(self._rawblock_buffer)
+                    self._rawblock_buffer = b""
                 except IOError:
                     # Trailing data isn't a valid bzip2 stream. We're done here.
                     self._mode = _MODE_READ_EOF
@@ -385,10 +417,54 @@ class BZ2File(io.BufferedIOBase):
         """
         with self._lock:
             self._check_can_write()
+            self._open_stream_if_needed()
             compressed = self._compressor.compress(data)
             self._fp.write(compressed)
             self._pos += len(data)
             return len(data)
+
+    def _ensure_no_active_compression_stream(self):
+        if self._compressor:
+            raise ValueError("Compressed I/O write while an uncompressed stream is open for writing")
+
+    def write_compressed_stream(self, compressed_stream_bytes, uncompressed_data_len):
+        """Write a complete compressed stream.
+
+        The given stream will be written as is to the underlying file
+        The current open stream will be closed, consecutive writes will be done to a new stream.
+        """
+        with self._lock:
+            self._check_can_write()
+            self._ensure_no_active_compression_stream()
+            self._fp.write(compressed_stream_bytes)
+            self._stream_counter += 1
+            self._pos += uncompressed_data_len
+            return uncompressed_data_len
+
+    def _ensure_no_active_decompression_stream(self):
+        self._fill_buffer(start_new_stream_if_needed=False)
+        if self._decompressor or self._buffer_offset < len(self._buffer):
+            raise ValueError("Compressed I/O read while reading an uncompressed stream")
+
+    def read_compressed_stream(self, size=-1):
+        """Read up to size compressed bytes from the file.
+
+        If size is negative or omitted, read until EOF is reached.
+        Returns b'' if the file is already at EOF.
+        """
+        with self._lock:
+            self._check_can_read()
+            self._ensure_no_active_decompression_stream()
+
+            if size < 0 or len(self._rawblock_buffer) < size:
+                compressed_stream = self._rawblock_buffer
+                compressed_stream += self._fp.read(size - len(compressed_stream))
+                self._rawblock_buffer = b""
+            else:
+                compressed_stream = self._rawblock_buffer[:size]
+                self._rawblock_buffer = self._rawblock_buffer[size:]
+
+            return compressed_stream
 
     def writelines(self, seq):
         """Write a sequence of byte strings to the file.
@@ -406,9 +482,11 @@ class BZ2File(io.BufferedIOBase):
         self._fp.seek(0, 0)
         self._mode = _MODE_READ
         self._pos = 0
-        self._decompressor = BZ2Decompressor()
+        self._decompressor = None
+        self._stream_counter = 0
         self._buffer = b""
         self._buffer_offset = 0
+        self._rawblock_buffer = b""
 
     def seek(self, offset, whence=0):
         """Change the file position.
